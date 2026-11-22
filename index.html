@@ -6,8 +6,8 @@
 <title>Awardfy</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js">
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
 // ===== AUTH SYSTEM =====
 const ADMIN_USER = {username:'claw', email:'claw@awardfy.com', password:'claw123', role:'Administrador', verified:true};
 
@@ -63,11 +63,13 @@ function showOk(id, msg) {
 // --- Toggle password visibility ---
 function togglePass(inputId, btn) {
   const inp = document.getElementById(inputId);
-  const show = inp.type === 'password';
-  inp.type = show ? 'text' : 'password';
-  btn.innerHTML = show
-    ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-    : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const isPassword = inp.type === 'password';
+  inp.type = isPassword ? 'text' : 'password';
+  // toggle icon via opacity on the two child spans
+  const eyeOpen = btn.querySelector('.eye-open');
+  const eyeOff  = btn.querySelector('.eye-off');
+  if (eyeOpen) eyeOpen.style.display = isPassword ? 'none' : '';
+  if (eyeOff)  eyeOff.style.display  = isPassword ? '' : 'none';
 }
 
 // --- Password strength ---
@@ -1275,8 +1277,9 @@ textarea.form-control { height: 90px; padding: 10px 12px; resize: vertical; }
         <label class="form-label">Senha</label>
         <div class="input-wrap">
           <input class="form-control" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-          <button class="input-eye" type="button" onclick="togglePass('login-pass',this)" tabindex="-1">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <button class="input-eye" type="button" onclick="togglePass('login-pass',this)" tabindex="-1" title="Mostrar/ocultar senha">
+            <span class="eye-open"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span>
+            <span class="eye-off" style="display:none"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
           </button>
         </div>
       </div>
@@ -1308,8 +1311,9 @@ textarea.form-control { height: 90px; padding: 10px 12px; resize: vertical; }
           <label class="form-label">Senha</label>
           <div class="input-wrap">
             <input class="form-control" id="reg-pass" type="password" placeholder="Mínimo 8 caracteres" autocomplete="new-password" oninput="checkPassStrength(this.value)" onkeydown="if(event.key==='Enter')doRegister()">
-            <button class="input-eye" type="button" onclick="togglePass('reg-pass',this)" tabindex="-1">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <button class="input-eye" type="button" onclick="togglePass('reg-pass',this)" tabindex="-1" title="Mostrar/ocultar senha">
+              <span class="eye-open"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span>
+              <span class="eye-off" style="display:none"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
             </button>
           </div>
           <div class="pass-strength" id="pass-strength" style="display:none">
