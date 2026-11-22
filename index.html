@@ -9,79 +9,353 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js">
 
 // ===== AUTH SYSTEM =====
-const ADMIN_USER = {username:'claw', email:'claw@awardfy.com', password:'claw123', role:'Administrador'};
+const ADMIN_USER = {username:'claw', email:'claw@awardfy.com', password:'claw123', role:'Administrador', verified:true};
 
-function getUsers() {
-  try { return JSON.parse(localStorage.getItem('pg_users') || '[]'); } catch(e) { return []; }
-}
-function saveUsers(users) {
-  localStorage.setItem('pg_users', JSON.stringify(users));
-}
-function getSession() {
-  try { return JSON.parse(localStorage.getItem('pg_session')); } catch(e) { return null; }
-}
-function saveSession(user) {
-  localStorage.setItem('pg_session', JSON.stringify(user));
-}
+// --- Storage helpers ---
+function getUsers() { try { return JSON.parse(localStorage.getItem('pg_users') || '[]'); } catch(e) { return []; } }
+function saveUsers(u) { localStorage.setItem('pg_users', JSON.stringify(u)); }
+function getSession() { try { return JSON.parse(localStorage.getItem('pg_session')); } catch(e) { return null; } }
+function saveSession(u) { localStorage.setItem('pg_session', JSON.stringify(u)); }
 
+// --- OTP state ---
+let _pendingUser = null;
+let _otpCode = null;
+let _otpTimer = null;
+
+// --- Init ---
 function initAuth() {
-  // seed admin
   let users = getUsers();
-  if (!users.find(u => u.username === ADMIN_USER.username)) {
-    users.push(ADMIN_USER);
-    saveUsers(users);
-  }
+  if (!users.find(u => u.username === ADMIN_USER.username)) { users.push(ADMIN_USER); saveUsers(users); }
   const session = getSession();
-  if (session) {
-    loginSuccess(session);
-  }
+  if (session) loginSuccess(session);
 }
 
+// --- Tab switch ---
 function switchAuthTab(tab) {
   document.getElementById('tab-login').classList.toggle('active', tab==='login');
   document.getElementById('tab-register').classList.toggle('active', tab==='register');
   document.getElementById('form-login').style.display = tab==='login' ? '' : 'none';
   document.getElementById('form-register').style.display = tab==='register' ? '' : 'none';
-  document.getElementById('login-err').classList.remove('show');
-  document.getElementById('reg-err').classList.remove('show');
+  hideReset();
+  clearAuthErrors();
 }
 
+function clearAuthErrors() {
+  ['login-err','reg-err','otp-err','reset-err'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el){ el.classList.remove('show'); el.textContent=''; }
+  });
+  ['otp-success','reset-success'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.classList.remove('show');
+  });
+}
+
+function showErr(id, msg) {
+  const el = document.getElementById(id);
+  if(el){ el.textContent = msg; el.classList.add('show'); }
+}
+function showOk(id, msg) {
+  const el = document.getElementById(id);
+  if(el){ el.textContent = msg; el.classList.add('show'); }
+}
+
+// --- Toggle password visibility ---
+function togglePass(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.innerHTML = show
+    ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+    : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+
+// --- Password strength ---
+function checkPassStrength(val) {
+  const wrap = document.getElementById('pass-strength');
+  if (!val) { wrap.style.display='none'; return; }
+  wrap.style.display='block';
+  let score = 0;
+  if (val.length >= 8) score++;
+  if (/[A-Z]/.test(val)) score++;
+  if (/[0-9]/.test(val)) score++;
+  if (/[^A-Za-z0-9]/.test(val)) score++;
+  const colors = ['#EF4444','#F59E0B','#3B82F6','#22C55E'];
+  const labels = ['Muito fraca','Fraca','Boa','Forte'];
+  for (let i=0; i<4; i++) {
+    document.getElementById('ps'+(i+1)).style.background = i < score ? colors[score-1] : 'var(--gray-mid)';
+  }
+  document.getElementById('ps-label').textContent = labels[score-1] || '';
+  document.getElementById('ps-label').style.color = colors[score-1] || 'var(--gray-text)';
+}
+
+// --- LOGIN ---
 function doLogin() {
   const id = document.getElementById('login-id').value.trim().toLowerCase();
   const pass = document.getElementById('login-pass').value;
-  const users = getUsers();
-  const user = users.find(u => (u.username.toLowerCase()===id || u.email.toLowerCase()===id) && u.password===pass);
-  if (!user) {
-    document.getElementById('login-err').classList.add('show');
-    return;
-  }
-  document.getElementById('login-err').classList.remove('show');
-  saveSession(user);
-  loginSuccess(user);
+  if (!id || !pass) { showErr('login-err','Preencha e-mail/usuário e senha.'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.textContent = 'Entrando…'; btn.disabled = true;
+  setTimeout(() => {
+    btn.textContent = 'Entrar'; btn.disabled = false;
+    const users = getUsers();
+    const user = users.find(u => (u.username.toLowerCase()===id || u.email.toLowerCase()===id) && u.password===pass);
+    if (!user) { showErr('login-err','E-mail/usuário ou senha incorretos.'); return; }
+    document.getElementById('login-err').classList.remove('show');
+    saveSession(user);
+    loginSuccess(user);
+  }, 700);
 }
 
-function doRegister() {
-  const name = document.getElementById('reg-name').value.trim();
-  const email = document.getElementById('reg-email').value.trim();
-  const pass = document.getElementById('reg-pass').value;
-  const errEl = document.getElementById('reg-err');
-  if (!name || !email || pass.length < 6) {
-    errEl.textContent = 'Preencha todos os campos. Senha mínima: 6 caracteres.';
-    errEl.classList.add('show'); return;
+// --- GOOGLE AUTH (simulated) ---
+function doGoogleAuth() {
+  const fakeGoogleUsers = [
+    {username:'Maria Silva', email:'maria.silva@gmail.com'},
+    {username:'João Costa', email:'joao.costa@gmail.com'},
+    {username:'Ana Pereira', email:'ana.pereira@gmail.com'}
+  ];
+  // Simulate Google popup
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:12px;width:380px;padding:0;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden">
+      <div style="padding:24px 24px 0;border-bottom:1px solid #eee">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+          <svg width="22" height="22" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          <span style="font-size:15px;font-weight:600;font-family:Inter,sans-serif">Fazer login com Google</span>
+        </div>
+        <p style="font-size:12px;color:#777;margin-bottom:16px;font-family:Inter,sans-serif">Escolha uma conta para continuar para <strong>Awardfy</strong></p>
+      </div>
+      <div id="google-accounts" style="padding:8px 0">
+        ${fakeGoogleUsers.map((u,i)=>`
+          <div onclick="selectGoogleAccount(${i})" style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background=''">
+            <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#C8A45D,#A8843D);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:14px;font-family:Inter,sans-serif">${u.username.charAt(0)}</div>
+            <div>
+              <div style="font-size:14px;font-weight:500;font-family:Inter,sans-serif">${u.username}</div>
+              <div style="font-size:12px;color:#777;font-family:Inter,sans-serif">${u.email}</div>
+            </div>
+          </div>
+        `).join('')}
+        <div onclick="selectGoogleAccount(-1)" style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#F5F5F5'" onmouseout="this.style.background=''">
+          <div style="width:40px;height:40px;border-radius:50%;border:2px dashed #ddd;display:flex;align-items:center;justify-content:center;color:#999">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          </div>
+          <div style="font-size:14px;color:#555;font-family:Inter,sans-serif">Usar outra conta</div>
+        </div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="this.closest('[style*=fixed]').remove()" style="font-size:13px;color:#555;background:none;border:none;cursor:pointer;padding:8px 12px;border-radius:6px;font-family:Inter,sans-serif">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  window._googleOverlay = overlay;
+  window._fakeGoogleUsers = fakeGoogleUsers;
+}
+
+function selectGoogleAccount(idx) {
+  if(window._googleOverlay) window._googleOverlay.remove();
+  let user;
+  if (idx === -1) {
+    // "Use another account" — just pick a random one for demo
+    user = { username:'Novo Usuário Google', email:'novo@gmail.com' };
+  } else {
+    user = window._fakeGoogleUsers[idx];
   }
+  // Check if already registered
   let users = getUsers();
-  if (users.find(u => u.username.toLowerCase()===name.toLowerCase() || u.email.toLowerCase()===email.toLowerCase())) {
-    errEl.textContent = 'Usuário ou e-mail já cadastrado.';
-    errEl.classList.add('show'); return;
+  let existing = users.find(u => u.email.toLowerCase() === user.email.toLowerCase());
+  if (existing) {
+    saveSession(existing);
+    loginSuccess(existing);
+    return;
   }
-  const newUser = {username: name, email: email, password: pass, role: 'Usuário'};
+  // Auto-register Google user (no password, no OTP needed)
+  const newUser = { username: user.username, email: user.email, password: null, role: 'Usuário', verified: true, provider: 'google' };
   users.push(newUser);
   saveUsers(users);
   saveSession(newUser);
-  errEl.classList.remove('show');
   loginSuccess(newUser);
 }
 
+// --- REGISTER (step 1) ---
+function doRegister() {
+  const name  = document.getElementById('reg-name').value.trim();
+  const email = document.getElementById('reg-email').value.trim();
+  const pass  = document.getElementById('reg-pass').value;
+  const errEl = document.getElementById('reg-err');
+  errEl.classList.remove('show');
+
+  if (!name || !email || !pass) { showErr('reg-err','Preencha todos os campos.'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showErr('reg-err','Informe um e-mail válido.'); return; }
+  if (pass.length < 8) { showErr('reg-err','A senha deve ter no mínimo 8 caracteres.'); return; }
+
+  let users = getUsers();
+  if (users.find(u => u.email.toLowerCase()===email.toLowerCase())) {
+    showErr('reg-err','Este e-mail já está cadastrado. Tente fazer login.');
+    return;
+  }
+
+  // Store pending user and send OTP
+  _pendingUser = { username: name, email: email, password: pass, role: 'Usuário', verified: false };
+  sendOTP(email);
+
+  // Show OTP screen
+  document.getElementById('reg-step1').style.display = 'none';
+  document.getElementById('otp-screen').classList.add('show');
+  document.getElementById('otp-email-display').textContent = email;
+  document.getElementById('otp0').focus();
+}
+
+// --- OTP ---
+function generateOTP() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function sendOTP(email) {
+  _otpCode = generateOTP();
+  // In a real app this would call an email API.
+  // Here we show it in a toast so the user can "receive" it.
+  setTimeout(() => {
+    showToast('📧 Código enviado para ' + email + ' — Código (demo): ' + _otpCode, 'info');
+  }, 400);
+  startOTPTimer();
+}
+
+function startOTPTimer() {
+  clearInterval(_otpTimer);
+  let seconds = 60;
+  const countEl = document.getElementById('otp-countdown');
+  const timerEl = document.getElementById('otp-timer');
+  const resendLink = document.querySelector('#otp-resend-wrap a');
+  if(timerEl) timerEl.style.display = 'inline';
+  if(resendLink) resendLink.style.pointerEvents = 'none', resendLink.style.opacity = '.4';
+  if(countEl) countEl.textContent = seconds;
+  _otpTimer = setInterval(() => {
+    seconds--;
+    if(countEl) countEl.textContent = seconds;
+    if (seconds <= 0) {
+      clearInterval(_otpTimer);
+      if(timerEl) timerEl.style.display='none';
+      if(resendLink) resendLink.style.pointerEvents='', resendLink.style.opacity='';
+    }
+  }, 1000);
+}
+
+function otpInput(idx) {
+  const inp = document.getElementById('otp'+idx);
+  inp.value = inp.value.replace(/[^0-9]/g,'').slice(-1);
+  inp.classList.toggle('filled', inp.value !== '');
+  if (inp.value && idx < 5) document.getElementById('otp'+(idx+1)).focus();
+  // Auto verify when all filled
+  const full = Array.from({length:6},(_,i)=>document.getElementById('otp'+i).value).join('');
+  if (full.length === 6) setTimeout(verifyOTP, 150);
+}
+
+function otpKey(e, idx) {
+  if (e.key === 'Backspace') {
+    const inp = document.getElementById('otp'+idx);
+    if (!inp.value && idx > 0) { document.getElementById('otp'+(idx-1)).focus(); }
+  }
+  if (e.key === 'v' && (e.ctrlKey||e.metaKey)) {
+    // paste support
+    setTimeout(()=>{
+      const val = document.getElementById('otp'+idx).value;
+      if (val.length > 1) {
+        const digits = val.replace(/\D/g,'').slice(0,6);
+        for(let i=0;i<6;i++){
+          const el = document.getElementById('otp'+i);
+          el.value = digits[i]||'';
+          el.classList.toggle('filled', !!el.value);
+        }
+        document.getElementById('otp'+(Math.min(digits.length,5))).focus();
+        if(digits.length===6) setTimeout(verifyOTP,150);
+      }
+    },0);
+  }
+}
+
+function verifyOTP() {
+  const code = Array.from({length:6},(_,i)=>document.getElementById('otp'+i).value).join('');
+  if (code.length < 6) { showErr('otp-err','Digite os 6 dígitos do código.'); return; }
+
+  const btn = document.getElementById('otp-btn');
+  btn.textContent = 'Verificando…'; btn.disabled = true;
+
+  setTimeout(() => {
+    btn.textContent = 'Verificar e-mail'; btn.disabled = false;
+    if (code !== _otpCode) {
+      showErr('otp-err','Código inválido. Verifique e tente novamente.');
+      Array.from({length:6},(_,i)=>document.getElementById('otp'+i)).forEach(el=>{ el.value=''; el.classList.remove('filled'); });
+      document.getElementById('otp0').focus();
+      return;
+    }
+    // Success
+    clearInterval(_otpTimer);
+    showOk('otp-success','✅ E-mail verificado com sucesso!');
+    document.getElementById('otp-err').classList.remove('show');
+    btn.style.display='none';
+
+    const newUser = {..._pendingUser, verified: true};
+    let users = getUsers();
+    users.push(newUser);
+    saveUsers(users);
+    saveSession(newUser);
+
+    setTimeout(() => loginSuccess(newUser), 900);
+  }, 800);
+}
+
+function resendOTP() {
+  if (!_pendingUser) return;
+  Array.from({length:6},(_,i)=>document.getElementById('otp'+i)).forEach(el=>{ el.value=''; el.classList.remove('filled'); });
+  document.getElementById('otp-err').classList.remove('show');
+  sendOTP(_pendingUser.email);
+  showToast('Novo código enviado!','success');
+}
+
+function backToRegister() {
+  clearInterval(_otpTimer);
+  document.getElementById('otp-screen').classList.remove('show');
+  document.getElementById('reg-step1').style.display='';
+}
+
+// --- RESET PASSWORD ---
+function showReset() {
+  document.getElementById('auth-tabs').style.display='none';
+  document.getElementById('form-login').style.display='none';
+  document.getElementById('form-register').style.display='none';
+  document.getElementById('reset-screen').classList.add('show');
+  document.getElementById('reset-email').value='';
+  clearAuthErrors();
+}
+
+function hideReset() {
+  document.getElementById('auth-tabs').style.display='';
+  document.getElementById('reset-screen').classList.remove('show');
+}
+
+function doResetRequest() {
+  const email = document.getElementById('reset-email').value.trim();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    showErr('reset-err','Informe um e-mail válido.'); return;
+  }
+  const btn = document.querySelector('#reset-screen .btn-primary');
+  btn.textContent='Enviando…'; btn.disabled=true;
+  setTimeout(()=>{
+    btn.textContent='Enviar instruções'; btn.disabled=false;
+    // We don't reveal if the email exists (security best practice)
+    showOk('reset-success','✅ Se este e-mail estiver cadastrado, você receberá as instruções em breve.');
+    document.getElementById('reset-err').classList.remove('show');
+    const users = getUsers();
+    const user = users.find(u => u.email.toLowerCase()===email.toLowerCase());
+    if(user){
+      const tempCode = generateOTP();
+      showToast('🔑 Link de redefinição (demo): código ' + tempCode,'info');
+    }
+  },900);
+}
+
+// --- LOGIN SUCCESS ---
 function loginSuccess(user) {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('main-app').style.display = '';
@@ -104,7 +378,6 @@ function applyUserToUI(user) {
   document.getElementById('input-username').value = user.username;
   document.getElementById('input-role').value = user.role || '';
   document.getElementById('input-email').value = user.email || '';
-  // greeting
   const greet = document.querySelector('.greeting-left h2');
   if (greet) greet.textContent = 'Bom dia, ' + user.username + ' 👋';
 }
@@ -118,9 +391,9 @@ function saveProfile() {
   const newpass = document.getElementById('input-newpass').value;
   if (!name) { showToast('Nome não pode ficar vazio.','error'); return; }
   let users = getUsers();
-  const idx = users.findIndex(u => u.username === session.username);
+  const idx = users.findIndex(u => u.email === session.email);
   const updated = {...session, username: name, role: role || session.role, email: email || session.email};
-  if (newpass && newpass.length >= 6) updated.password = newpass;
+  if (newpass && newpass.length >= 8) updated.password = newpass;
   if (idx >= 0) users[idx] = updated;
   saveUsers(users);
   saveSession(updated);
@@ -135,6 +408,7 @@ function doLogout() {
   document.getElementById('auth-screen').style.display = 'flex';
   document.getElementById('login-id').value = '';
   document.getElementById('login-pass').value = '';
+  hideReset();
   switchAuthTab('login');
 }
 
@@ -854,7 +1128,7 @@ textarea.form-control { height: 90px; padding: 10px 12px; resize: vertical; }
 /* ===== AUTH SCREEN ===== */
 #auth-screen {
   position: fixed; inset: 0;
-  background: var(--gray-bg);
+  background: linear-gradient(135deg, #F6F6F4 0%, #EFEDE8 100%);
   display: flex; align-items: center; justify-content: center;
   z-index: 9999;
   padding: 20px;
@@ -862,26 +1136,105 @@ textarea.form-control { height: 90px; padding: 10px 12px; resize: vertical; }
 .auth-box {
   background: white;
   border: 1px solid var(--gray-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
-  width: 100%; max-width: 420px;
-  padding: 40px 36px;
+  border-radius: 16px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.10);
+  width: 100%; max-width: 440px;
+  padding: 44px 40px 36px;
+  animation: authSlideIn .28s cubic-bezier(.4,0,.2,1);
 }
+@keyframes authSlideIn { from { opacity:0; transform: translateY(16px); } to { opacity:1; transform: translateY(0); } }
 .auth-logo {
   display: flex; align-items: center; gap: 10px;
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
-.auth-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-.auth-sub { font-size: 13px; color: var(--gray-text); margin-bottom: 28px; }
-.auth-tab-row { display: flex; gap: 0; margin-bottom: 28px; border-bottom: 2px solid var(--gray-border); }
+.auth-title { font-size: 22px; font-weight: 700; margin-bottom: 5px; letter-spacing: -.3px; }
+.auth-sub { font-size: 13px; color: var(--gray-text); margin-bottom: 24px; line-height: 1.5; }
+.auth-tab-row { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 2px solid var(--gray-border); }
 .auth-tab {
   flex: 1; text-align: center; padding: 10px; font-size: 14px; font-weight: 500;
   color: var(--gray-text); cursor: pointer; transition: all var(--transition);
   border-bottom: 2px solid transparent; margin-bottom: -2px;
 }
 .auth-tab.active { color: var(--gold-dark); border-bottom-color: var(--gold); }
-.auth-err { font-size: 12px; color: var(--red); margin-top: -8px; margin-bottom: 12px; display: none; }
+.auth-err { font-size: 12px; color: var(--red); margin-top: -8px; margin-bottom: 12px; display: none; background: var(--red-bg); border: 1px solid rgba(239,68,68,.2); border-radius: 6px; padding: 8px 10px; }
 .auth-err.show { display: block; }
+.auth-success { font-size: 12px; color: #16A34A; margin-top: -8px; margin-bottom: 12px; display: none; background: #F0FDF4; border: 1px solid rgba(34,197,94,.2); border-radius: 6px; padding: 8px 10px; }
+.auth-success.show { display: block; }
+
+/* Google button */
+.btn-google {
+  width: 100%; height: 42px; border-radius: var(--radius-sm);
+  border: 1.5px solid var(--gray-border);
+  background: white; color: var(--black);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-size: 14px; font-weight: 500; cursor: pointer;
+  transition: all var(--transition); font-family: inherit;
+  margin-bottom: 6px;
+}
+.btn-google:hover { background: var(--gray-bg); border-color: #BDBDBD; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.btn-google svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+/* OR divider */
+.auth-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 18px 0; color: var(--gray-text); font-size: 12px;
+}
+.auth-divider::before, .auth-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--gray-border);
+}
+
+/* Password strength */
+.pass-strength { margin-top: 6px; }
+.pass-strength-bar { display: flex; gap: 3px; }
+.pass-strength-seg { flex: 1; height: 3px; border-radius: 20px; background: var(--gray-mid); transition: background .3s; }
+.pass-strength-label { font-size: 11px; color: var(--gray-text); margin-top: 4px; }
+
+/* OTP screen */
+.otp-screen { display: none; }
+.otp-screen.show { display: block; }
+.otp-info { background: rgba(200,164,93,.08); border: 1px solid rgba(200,164,93,.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 20px; font-size: 13px; line-height: 1.5; }
+.otp-info strong { color: var(--gold-dark); }
+.otp-fields { display: flex; gap: 8px; justify-content: center; margin: 20px 0; }
+.otp-input {
+  width: 48px; height: 56px;
+  border: 2px solid var(--gray-border);
+  border-radius: var(--radius-sm);
+  text-align: center; font-size: 22px; font-weight: 700;
+  font-family: 'Inter', monospace;
+  outline: none; transition: all var(--transition);
+  color: var(--black);
+}
+.otp-input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(200,164,93,.15); }
+.otp-input.filled { border-color: var(--gold); background: rgba(200,164,93,.05); }
+.otp-resend { font-size: 12px; color: var(--gray-text); text-align: center; margin-top: 12px; }
+.otp-resend a { color: var(--gold-dark); cursor: pointer; font-weight: 500; text-decoration: none; }
+.otp-resend a:hover { text-decoration: underline; }
+
+/* Input with icon */
+.input-wrap { position: relative; }
+.input-wrap .form-control { padding-right: 36px; }
+.input-eye {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  cursor: pointer; color: var(--gray-text); background: none; border: none;
+  display: flex; align-items: center; padding: 0;
+}
+.input-eye:hover { color: var(--black); }
+
+/* Forgot password */
+.auth-forgot { font-size: 12px; text-align: right; margin-top: -6px; margin-bottom: 14px; }
+.auth-forgot a { color: var(--gold-dark); cursor: pointer; text-decoration: none; font-weight: 500; }
+.auth-forgot a:hover { text-decoration: underline; }
+
+/* Reset password screen */
+.reset-screen { display: none; }
+.reset-screen.show { display: block; }
+.auth-back { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--gray-text); cursor: pointer; margin-bottom: 20px; border: none; background: none; padding: 0; font-family: inherit; transition: color var(--transition); }
+.auth-back:hover { color: var(--black); }
+
+/* Terms */
+.auth-terms { font-size: 11px; color: var(--gray-text); text-align: center; margin-top: 16px; line-height: 1.5; }
+.auth-terms a { color: var(--gold-dark); text-decoration: none; }
+.auth-terms a:hover { text-decoration: underline; }
 
 </style>
 </head>
@@ -889,49 +1242,134 @@ textarea.form-control { height: 90px; padding: 10px 12px; resize: vertical; }
 
 
 <div id="auth-screen">
-  <div class="auth-box">
+  <div class="auth-box" id="auth-box">
+
+    <!-- LOGO -->
     <div class="auth-logo">
       <div class="logo-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       </div>
       <span class="logo-text">Award<span>fy</span></span>
     </div>
-    <div class="auth-tab-row">
+
+    <!-- TABS -->
+    <div class="auth-tab-row" id="auth-tabs">
       <div class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Entrar</div>
       <div class="auth-tab" id="tab-register" onclick="switchAuthTab('register')">Criar conta</div>
     </div>
 
-    <!-- LOGIN -->
+    <!-- ===== LOGIN FORM ===== -->
     <div id="form-login">
+      <button class="btn-google" onclick="doGoogleAuth()">
+        <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
+        Continuar com Google
+      </button>
+
+      <div class="auth-divider">ou entre com e-mail</div>
+
       <div class="form-group">
-        <label class="form-label">Nome de usuário ou e-mail</label>
-        <input class="form-control" id="login-id" placeholder="usuario ou email@exemplo.com" autocomplete="username">
+        <label class="form-label">E-mail ou nome de usuário</label>
+        <input class="form-control" id="login-id" placeholder="voce@email.com" autocomplete="username">
       </div>
-      <div class="form-group">
+      <div class="form-group" style="margin-bottom:6px">
         <label class="form-label">Senha</label>
-        <input class="form-control" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+        <div class="input-wrap">
+          <input class="form-control" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+          <button class="input-eye" type="button" onclick="togglePass('login-pass',this)" tabindex="-1">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="auth-err" id="login-err">Usuário ou senha incorretos.</div>
-      <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px" onclick="doLogin()">Entrar</button>
+      <div class="auth-forgot"><a onclick="showReset()">Esqueceu a senha?</a></div>
+      <div class="auth-err" id="login-err"></div>
+      <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px;border-radius:8px" onclick="doLogin()" id="login-btn">Entrar</button>
     </div>
 
-    <!-- REGISTER -->
+    <!-- ===== REGISTER FORM ===== -->
     <div id="form-register" style="display:none">
-      <div class="form-group">
-        <label class="form-label">Nome de usuário</label>
-        <input class="form-control" id="reg-name" placeholder="seunome" autocomplete="username">
+      <button class="btn-google" onclick="doGoogleAuth()">
+        <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/><path fill="none" d="M0 0h48v48H0z"/></svg>
+        Criar conta com Google
+      </button>
+
+      <div class="auth-divider">ou cadastre com e-mail</div>
+
+      <!-- Step 1: dados -->
+      <div id="reg-step1">
+        <div class="form-group">
+          <label class="form-label">Nome completo</label>
+          <input class="form-control" id="reg-name" placeholder="Seu nome" autocomplete="name">
+        </div>
+        <div class="form-group">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" id="reg-email" type="email" placeholder="voce@email.com" autocomplete="email">
+        </div>
+        <div class="form-group" style="margin-bottom:4px">
+          <label class="form-label">Senha</label>
+          <div class="input-wrap">
+            <input class="form-control" id="reg-pass" type="password" placeholder="Mínimo 8 caracteres" autocomplete="new-password" oninput="checkPassStrength(this.value)" onkeydown="if(event.key==='Enter')doRegister()">
+            <button class="input-eye" type="button" onclick="togglePass('reg-pass',this)" tabindex="-1">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="pass-strength" id="pass-strength" style="display:none">
+            <div class="pass-strength-bar">
+              <div class="pass-strength-seg" id="ps1"></div>
+              <div class="pass-strength-seg" id="ps2"></div>
+              <div class="pass-strength-seg" id="ps3"></div>
+              <div class="pass-strength-seg" id="ps4"></div>
+            </div>
+            <div class="pass-strength-label" id="ps-label"></div>
+          </div>
+        </div>
+        <div class="auth-err" id="reg-err"></div>
+        <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px;border-radius:8px;margin-top:8px" onclick="doRegister()" id="reg-btn">Criar conta</button>
+        <p class="auth-terms">Ao criar sua conta, você concorda com os <a href="#">Termos de Uso</a> e a <a href="#">Política de Privacidade</a> da Awardfy.</p>
       </div>
-      <div class="form-group">
-        <label class="form-label">E-mail</label>
-        <input class="form-control" id="reg-email" type="email" placeholder="voce@email.com" autocomplete="email">
+
+      <!-- Step 2: verificação OTP -->
+      <div class="otp-screen" id="otp-screen">
+        <div class="otp-info">
+          Enviamos um código de 6 dígitos para <strong id="otp-email-display"></strong>. Verifique sua caixa de entrada (e o spam).
+        </div>
+        <div class="otp-fields">
+          <input class="otp-input" id="otp0" maxlength="1" oninput="otpInput(0)" onkeydown="otpKey(event,0)">
+          <input class="otp-input" id="otp1" maxlength="1" oninput="otpInput(1)" onkeydown="otpKey(event,1)">
+          <input class="otp-input" id="otp2" maxlength="1" oninput="otpInput(2)" onkeydown="otpKey(event,2)">
+          <input class="otp-input" id="otp3" maxlength="1" oninput="otpInput(3)" onkeydown="otpKey(event,3)">
+          <input class="otp-input" id="otp4" maxlength="1" oninput="otpInput(4)" onkeydown="otpKey(event,4)">
+          <input class="otp-input" id="otp5" maxlength="1" oninput="otpInput(5)" onkeydown="otpKey(event,5)">
+        </div>
+        <div class="auth-err" id="otp-err"></div>
+        <div class="auth-success" id="otp-success"></div>
+        <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px;border-radius:8px" onclick="verifyOTP()" id="otp-btn">Verificar e-mail</button>
+        <div class="otp-resend" id="otp-resend-wrap">
+          Não recebeu? <a onclick="resendOTP()">Reenviar código</a>
+          <span id="otp-timer" style="display:none"> em <strong id="otp-countdown">60</strong>s</span>
+        </div>
+        <div style="text-align:center;margin-top:12px">
+          <button onclick="backToRegister()" style="font-size:12px;color:var(--gray-text);background:none;border:none;cursor:pointer;font-family:inherit">← Voltar e corrigir e-mail</button>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Senha</label>
-        <input class="form-control" id="reg-pass" type="password" placeholder="Mínimo 6 caracteres" autocomplete="new-password" onkeydown="if(event.key==='Enter')doRegister()">
-      </div>
-      <div class="auth-err" id="reg-err">Preencha todos os campos corretamente.</div>
-      <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px" onclick="doRegister()">Criar conta</button>
     </div>
+
+    <!-- ===== RESET PASSWORD ===== -->
+    <div class="reset-screen" id="reset-screen">
+      <button class="auth-back" onclick="hideReset()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Voltar ao login
+      </button>
+      <div class="auth-title">Redefinir senha</div>
+      <div class="auth-sub">Informe seu e-mail e enviaremos as instruções de recuperação.</div>
+      <div class="form-group">
+        <label class="form-label">E-mail cadastrado</label>
+        <input class="form-control" id="reset-email" type="email" placeholder="voce@email.com" onkeydown="if(event.key==='Enter')doResetRequest()">
+      </div>
+      <div class="auth-err" id="reset-err"></div>
+      <div class="auth-success" id="reset-success"></div>
+      <button class="btn btn-primary" style="width:100%;height:42px;font-size:14px;border-radius:8px" onclick="doResetRequest()">Enviar instruções</button>
+    </div>
+
   </div>
 </div>
 
